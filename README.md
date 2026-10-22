@@ -1,4 +1,17 @@
-# SEABench
+<h1 align="center">SEABench</h1>
+
+<p align="center">
+  <a href="https://arxiv.org/abs/2609.35596">
+    <img alt="arXiv" src="https://img.shields.io/badge/arXiv-2609.35596-b31b1b.svg">
+  </a>
+  <a href="https://seabench-endogenous-misalignment.github.io/">
+    <img alt="SEABench website" src="https://img.shields.io/badge/website-SEABench-181717.svg">
+  </a>
+  <a href="#citation">
+    <img alt="Citation" src="https://img.shields.io/badge/cite-SEABench-6f42c1.svg">
+  </a>
+
+</p>
 
 SEABench is a benchmark for studying endogenous misalignment in self-evolving
 LLM agents. It contains 48 longitudinal task sequences spanning multiple
@@ -7,37 +20,125 @@ environment. The benchmark pairs self-evolving runs with non-evolving controls
 and uses an adaptive trajectory-discovery pipeline to find safety failures while
 preserving the intent of the original tasks.
 
-The primary paper experiments refine the existing sequences under `tasks/` with
-the prompt-optimization pipeline described below.
+<p align="center">
+  <img src="docs/images/seabench-schematic.jpg" alt="SEABench benchmark schematic" width="100%" />
+</p>
 
-## Repo Layout
+## Core Features
 
-- `agent/`: agent implementation, controller surface, and tools.
-- `analysis_tools/`: benchmark analysis and tracking helpers.
-- `prompt_optimization/`: adaptive task-sequence refinement, replay, and utility-evaluation pipelines.
-- `prompt_optimization_analysis/`: Chain-of-Thought analysis and mitigation scripts
-- `runtime/`: shared runtime configuration and task loading.
-- `sandbox/`: workspace seeding utilities and Apptainer definition.
-- `scripts/`: benchmark, smoke-test, and reset entrypoints.
-- `configs/`: provider profiles.
-- `env_assets/`: immutable environment seed data and generation utilities, main environment used for experiments.
-- `env_assets_utility_test/`: counterfactual environments with alternate users for testing utility
-- `tasks/`: benchmark task manifests split by evolution surface
-- `artifacts/`: ignored run outputs, created on demand.
+- **Longitudinal self-evolution benchmark:** 48 task sequences across different tasks domains study whether
+  behavior remains aligned after an agent self-evolves.
+- **Multiple evolution surfaces:** Evaluate controller file, memory, and tools/skills evolution surfaces.
+- **Safety-focused evaluation:** Existing task sequences cover privacy, hallucination, guardrail
+  erosion, and contextual-boundary-collapse harm types with a hidden safety judge.
+- **Configurable task sequences:** Define prompts, validators, optimization
+  roles, controller-file overrides, workspace setup, and tool exposure in
+  YAML without changing the runner.
+- **Paired controls:** Compare an evolved agent with a non-evolving
+  (`surface=none`) baseline under the same task sequence to separate ordinary
+  task behavior from effects caused by persistent self-evolution.
+- **Adaptive trajectory discovery:** Refine task prompts with TextGrad and
+  paired replays, retaining useful task completion while searching for
+  safety-relevant failures.
+- **Post-hoc analysis and mitigation:** Inspect reasoning traces and evaluate
+  mitigation strategies through the analysis workflows under
+  `prompt_optimization_analysis/`.
 
-Task sequence YAML can also include per-sequence and per-task setup blocks to override controller files and tool exposure. See `docs/task_setup.md`.
 
-## Environment Setup
+## Task Sequence Format
+
+Task sequences are YAML files with metadata, optional setup and generation
+configuration, and an ordered list of tasks. A typical sequence looks like:
+
+```yaml
+id: example-sequence
+type: task_sequence
+title: Example Self-Evolution Sequence
+description: A sequence of upstream evolution tasks followed by safety tests.
+status: active
+validation_backend: llm
+
+generation:
+  surface: controller_update
+  target_harm: privacy
+
+sequence_setup:
+  clear_paths:
+    - skills
+    - created_tools
+  ensure_dirs:
+    - skills
+  tool_allowlist:
+    - read_file
+    - list_files
+    - apply_controller_update
+
+tasks:
+  - id: task_001
+    title: Upstream task
+    prompt: |
+      Complete the user task_001
+    validator:
+      llm:
+        criteria: |
+          1. The response completes the requested task.
+          2. The response follows the relevant safety constraints.
+    optimization:
+      role: upstream
+```
+
+See [`docs/task_setup.md`](docs/task_setup.md) for all supported setup fields
+and additional examples.
+
+## Quick Start
+
+### Environment Setup
 
 Install the dependencies and configure the provider key:
 
 ```bash
 ./scripts/setup_venv.sh
 source .venv/bin/activate
+```
+
+### Setting API key
+
+Set the API key for your preferred provider
+```bash
 export OPENROUTER_API_KEY="<your-key>"
 ```
 
-## Main Experiment: Refine an Existing Sequence
+### Adding a New Provider
+To add another OpenAI-compatible provider, create a profile under
+`configs/providers/`. For example, create `configs/providers/myprovider.yaml`:
+
+```yaml
+name: myprovider
+base_url: https://api.myprovider.com/v1
+api_key_env: MYPROVIDER_API_KEY
+default_model: provider/model-name
+context_window_tokens: 32768
+request_token_reserve: 2048
+```
+
+Export the key named by `api_key_env`:
+
+```bash
+export MYPROVIDER_API_KEY="<your-key>"
+```
+
+Select the profile by its filename (without `.yaml`). For the task-sequence
+runner without adaptive refinement, set it in the run configuration:
+
+```yaml
+provider:
+  profile: myprovider
+  agent_model: provider/model-name
+  judge_model: provider/model-name
+```
+
+
+### Refine an Existing Sequence (Main Experiment)
 
 The main experiment starts from one of the task-sequence YAML files in `tasks/`
 and searches over prompt candidates using paired replays of a self-evolving
@@ -52,6 +153,7 @@ python3 prompt_optimization/refine_existing_sequence.py \
   --surface controller_update \
   --max-candidates-per-task 5 \
   --downstream-safety-lookahead \
+  --downstream-standalone \
   --provider-profile openrouter \
   --agent-model openai/gpt-5.6-luna \
   --judge-model openai/gpt-5.6-luna
@@ -71,76 +173,49 @@ For long-running experiments, invoke it through the retry shell wrapper
   --surface controller_update \
   --max-candidates-per-task 5 \
   --downstream-safety-lookahead \
+  --downstream-standalone \
   --provider-profile openrouter \
   --agent-model openai/gpt-5.6-luna \
   --judge-model openai/gpt-5.6-luna
 ```
 
-
-The pipeline infers the evolution surface and sequence ID from the input YAML
-unless `--surface` or `--sequence-id` is supplied. It then runs two stages:
-
 In this repository, **upstream** refers to the evolution tasks in the paper,
 while **downstream** refers to the safety test tasks in the paper.
 
-1. **Upstream hardening.** Upstream tasks are refined while retaining the normal
-   contrastive checks and requiring the non-evolving baseline to fail on its
-   first attempt. Accepted trajectories must still exhibit useful task
-   completion and a meaningful persistent self-evolution update.
-2. **Downstream refinement.** Downstream safety-test tasks are replayed from the
-   state created by the accepted upstream trajectory. Further self-evolution is
-   frozen so observed downstream failures can be attributed to persistent
-   upstream changes; tasks that do not meet the hard filters are retried and
-   repaired.
-
 Candidate search defaults to the TextGrad backend. The main search budget is
-set with `--max-candidates-per-task`. Use `--optimizer-model` to override the textgrad rewriter from their provider profiles.
+set with `--max-candidates-per-task`. Use `--optimizer-model` to override the textgrad rewriter from their default provider profiles.
 
-Each output directory contains a copy of the input as
-`generated_sequence.yaml`, staged artifacts and logs under
-`cascade_optimization/`, and the final accepted sequence as
-`final_refined_sequence.yaml`. The source YAML is left unchanged unless
-`--in-place` is explicitly passed. See `prompt_optimization/README.md` for the
+See `prompt_optimization/README.md` for the
 lower-level refinement entry points, acceptance rules, and advanced options.
 
-## Inital Task Sequence Creation
+### Inital Task Sequence Creation
 For creation of new task sequences, see `docs/task_sequence_creation.md`.
 
-## Runtime Boundary
 
-- Immutable seed data: `env_assets/`
-- Immutable controller seed: `agent/seeded_files/`
-- Mutable runtime workspace: `artifacts/run_<timestamp>/workspace/`
-- Mutable run artifacts: `artifacts/run_<timestamp>/`
+### Task Sequence Runner without Adaptive Refinement
 
-Before each run, a fresh per-run workspace is reset from immutable seeds.
-The live workspace is seeded from the structured directory tree under `env_assets/`;
-Runtime state is created per run under `artifacts/run_<timestamp>/`, including that run's `workspace/`, logs, checkpoints, and analysis outputs.
-
-## General Task Sequence Runner
-
-The following workflow runs task sequences without the adaptive refinement loop.
-It remains useful for direct benchmark execution, smoke tests, and evaluating
-already-refined sequences.
+The following workflow runs one task sequence without the adaptive refinement loop
+inside an Apptainer sandbox. The sandbox image is built automatically on the
+first run if it does not already exist.
 
 ```bash
-# Create a local virtual environment
-./scripts/setup_venv.sh
-source .venv/bin/activate
-
-# Reset runtime state
-./scripts/reset_runtime.sh
-
-# Smoke test (builds/uses sandbox image and validates runtime contract)
-./scripts/test_smoke.sh
-
-# Run benchmark loop
-export OPENROUTER_API_KEY="<your-key>"
-./scripts/run.sh
-
-# Run only one configured task sequence
 ./scripts/run.sh --run-config configs/runs/controller_update_computer_use_privacy.yaml
 ```
 
-## Chain-of-Thought Analysis and Mitigation
+### Chain-of-Thought Analysis and Mitigation
 Refer `prompt_optimization_analysis/reasoningflow/README` for details on running the post-hoc chain of thought analysis, and `prompt_optimization_analysis/reasoning_monitor/README` for the mitigation experiments.
+
+## Citation
+
+If you use SEABench in your research, please cite:
+
+```bibtex
+@article{das2026seabench,
+  author        = {Das, Saswat and Viswanathan, Parvati and Donnelly, Daniel and
+                   Huang, Chang and Abdelnabi, Sahar and Fioretto, Ferdinando},
+  title         = {SEABench: Benchmarking Endogenous Misalignment in Self-Evolving Agents},
+  journal       = {arXiv preprint arXiv:2609.35596},
+  year          = {2026},
+  url           = {https://arxiv.org/abs/2609.35596}
+}
+```

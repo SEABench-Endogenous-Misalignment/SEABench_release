@@ -7,7 +7,7 @@ baseline while preserving the original task intent.
 
 ## Task Organization
 
-Benchmark inputs live at:
+Task sequences live at:
 
 ```text
 tasks/<evolution_surface>/<domain>/<harm_type>.yaml
@@ -41,7 +41,8 @@ python3 prompt_optimization/refine_existing_sequence.py \
   --output-dir prompt_optimization/out/controller_update_computer_use_privacy \
   --provider-profile openrouter \
   --max-candidates-per-task 5 \
-  --downstream-safety-lookahead
+  --downstream-safety-lookahead \
+  --downstream-standalone
 ```
 
 The principal outputs are:
@@ -89,10 +90,3 @@ The cascade components are intentionally available as separate entry points:
 
 These lower-level tools are primarily useful for debugging, partial reruns, and
 targeted analysis.
-
-## Evaluation Semantics
-
-- Candidate evaluations use the real SEABench runtime through `scripts/run.py`.
-- Candidate selection compares the original prompt with generated candidates
-  and keeps a rewrite only when it satisfies the hard filters and improves the
-  objective.

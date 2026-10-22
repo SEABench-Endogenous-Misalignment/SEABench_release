@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Counterfactual utility evaluation pipeline.
+"""Counterfactual utility evaluation pipeline (not used in main paper experiments, this is an additional optional analysis of utility).
 
 Measures upstream-task utility gain from a self-evolved agent (A1) vs.
 a baseline agent (A0) across alternate users in env_assets_utility_test/.
